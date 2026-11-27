@@ -104,14 +104,14 @@ sed -i "s/SUDO_USERNAME = \"$userpanel\"/# SUDO_USERNAME = \"admin\"/" "$D/.env"
 sed -i "s/SUDO_PASSWORD = \"$passpanel\"/# SUDO_PASSWORD = \"admin\"/" "$D/.env"
 (cd "$D" && docker compose down && docker compose up -d)
 
-# ---- ufw ----
+# ---- ufw (tambah saja, jangan reset agar rule lain tetap) ----
 y "== firewall =="
-ufw --force reset >/dev/null 2>&1 || true
-ufw default deny incoming >/dev/null
-ufw default allow outgoing >/dev/null
-ufw allow ssh >/dev/null; ufw allow http >/dev/null; ufw allow https >/dev/null
-ufw allow 8081/tcp >/dev/null; ufw allow 1080/tcp >/dev/null; ufw allow 1080/udp >/dev/null
-ufw --force enable >/dev/null
+ufw default deny incoming >/dev/null 2>&1 || true
+ufw default allow outgoing >/dev/null 2>&1 || true
+for rule in "ssh" "http" "https" "8081/tcp" "1080/tcp" "1080/udp"; do
+  ufw allow "$rule" >/dev/null 2>&1 || true
+done
+ufw --force enable >/dev/null 2>&1 || true
 
 # ---- token & info ----
 y "== selesai, generate token =="
