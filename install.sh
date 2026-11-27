@@ -44,6 +44,12 @@ apt-get purge -y --auto-remove samba* apache2* sendmail* bind9* >/dev/null 2>&1 
 apt-get install -y curl wget unzip zip screen htop nano socat iptables ufw cron at bsdmainutils lsof lnav bc gnupg dnsutils net-tools vnstat docker.io docker-compose-plugin 2>/dev/null \
   || { curl -fsSL https://get.docker.com | sh; }
 
+# pastikan docker daemon hidup
+systemctl enable --now docker >/dev/null 2>&1 || true
+for i in 1 2 3 4 5; do docker info >/dev/null 2>&1 && break; sleep 3; done
+docker info >/dev/null 2>&1 || die "docker daemon tidak jalan"
+docker compose version >/dev/null 2>&1 || die "docker compose plugin tidak ada"
+
 # ---- sysctl/BBR ----
 if ! grep -q "maylin-bbr" /etc/sysctl.conf 2>/dev/null; then
   sed -i 's/^net.ipv6.conf.all.disable_ipv6.*/# &/' /etc/sysctl.conf 2>/dev/null || true
@@ -86,16 +92,21 @@ echo "<pre>Setup by Maylin</pre>" >/var/www/html/index.html
 
 # ---- sertifikat (sebelum nginx pakai port 80) ----
 y "== admin & sertifikat =="
-curl -fsSL https://get.acme.sh | sh -s email="$email" >/dev/null 2>&1
-"$HOME/.acme.sh/acme.sh" --server letsencrypt --register-account -m "$email" >/dev/null 2>&1 || true
-"$HOME/.acme.sh/acme.sh" --issue -d "$domain" --standalone -k ec-256 --force || y "issue cert: cek DNS/port 80"
-"$HOME/.acme.sh/acme.sh" --installcert -d "$domain" \
-  --fullchainpath /var/lib/marzban/xray.crt --keypath /var/lib/marzban/xray.key --ecc || true
+command -v socat >/dev/null || apt-get install -y socat >/dev/null 2>&1 || true
+curl -fsSL https://get.acme.sh | sh -s email="$email" >/dev/null 2>&1 || true
+ACME="$HOME/.acme.sh/acme.sh"
+[ -x "$ACME" ] || die "acme.sh gagal dipasang"
+"$ACME" --set-default-ca --server letsencrypt >/dev/null 2>&1 || true
+"$ACME" --register-account -m "$email" >/dev/null 2>&1 || true
+"$ACME" --issue -d "$domain" --standalone -k ec-256 --force || die "issue cert gagal (cek A record & port 80 bebas)"
+"$ACME" --installcert -d "$domain" \
+  --fullchainpath /var/lib/marzban/xray.crt --keypath /var/lib/marzban/xray.key --ecc || die "install cert gagal"
+[ -s /var/lib/marzban/xray.crt ] && [ -s /var/lib/marzban/xray.key ] || die "cert tidak ada"
 
 # ---- admin via env, boot ----
 sed -i "s/# SUDO_USERNAME = \"admin\"/SUDO_USERNAME = \"$userpanel\"/" "$D/.env"
 sed -i "s/# SUDO_PASSWORD = \"admin\"/SUDO_PASSWORD = \"$passpanel\"/" "$D/.env"
-(cd "$D" && docker compose up -d)
+(cd "$D" && docker compose up -d) || die "docker compose gagal"
 sleep 25
 
 docker exec marzban-marzban-1 marzban cli admin import-from-env -y 2>/dev/null || \
