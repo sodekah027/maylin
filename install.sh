@@ -93,8 +93,14 @@ echo "<pre>Setup by Maylin</pre>" >/var/www/html/index.html
 # ---- sertifikat (sebelum nginx pakai port 80) ----
 y "== admin & sertifikat =="
 command -v socat >/dev/null || apt-get install -y socat >/dev/null 2>&1 || true
-curl -fsSL https://get.acme.sh | sh -s email="$email" >/dev/null 2>&1 || true
+curl -fsSL https://get.acme.sh -o /tmp/acme_install.sh 2>/dev/null || true
+if [ -s /tmp/acme_install.sh ]; then
+  sh /tmp/acme_install.sh -s email="$email" --force >/dev/null 2>&1 || true
+fi
 ACME="$HOME/.acme.sh/acme.sh"
+if [ ! -x "$ACME" ] && [ -s /tmp/acme_install.sh ]; then
+  sh /tmp/acme_install.sh -s email="$email" --force --nocron >/dev/null 2>&1 || true
+fi
 [ -x "$ACME" ] || die "acme.sh gagal dipasang"
 "$ACME" --set-default-ca --server letsencrypt >/dev/null 2>&1 || true
 "$ACME" --register-account -m "$email" >/dev/null 2>&1 || true
