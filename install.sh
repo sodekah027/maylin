@@ -115,8 +115,9 @@ sed -i "s/# SUDO_PASSWORD = \"admin\"/SUDO_PASSWORD = \"$passpanel\"/" "$D/.env"
 (cd "$D" && docker compose up -d) || die "docker compose gagal"
 sleep 25
 
-docker exec marzban-marzban-1 marzban cli admin import-from-env -y 2>/dev/null || \
-  (cd "$D" && docker compose exec -T marzban marzban cli admin import-from-env -y) || y "import admin manual perlu"
+(cd "$D" && docker compose exec -T marzban python /code/marzban-cli.py admin import-from-env -y 2>/dev/null) \
+  || docker exec marzban-marzban-1 python /code/marzban-cli.py admin import-from-env -y 2>/dev/null \
+  || y "import admin manual perlu (docker compose exec marzban python /code/marzban-cli.py admin import-from-env -y)"
 sed -i "s/SUDO_USERNAME = \"$userpanel\"/# SUDO_USERNAME = \"admin\"/" "$D/.env"
 sed -i "s/SUDO_PASSWORD = \"$passpanel\"/# SUDO_PASSWORD = \"admin\"/" "$D/.env"
 (cd "$D" && docker compose down && docker compose up -d)
