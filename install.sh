@@ -1,0 +1,129 @@
+#!/bin/bash
+# maylin/install.sh - installer Marzban + MarLing mandiri (tanpa script pihak lain)
+set -euo pipefail
+R="https://cdn.jsdelivr.net/gh/sodekah027/maylin@main"
+D=/opt/marzban
+DATA=/etc/maylin
+
+r() { printf '\e[92m%s\e[0m\n' "$*"; }
+y() { printf '\e[93m%s\e[0m\n' "$*"; }
+e() { printf '\e[91m%s\e[0m\n' "$*"; }
+die() { e "$*"; exit 1; }
+
+[ "$(id -u)" = 0 ] || die "root saja"
+. /etc/os-release 2>/dev/null || die "os-release tak ada"
+case "$ID $VERSION_ID" in
+  "debian 12"|"debian 11"|"ubuntu 20.04") ;;
+  *) die "hanya Debian 11/12 atau Ubuntu 20.04" ;;
+esac
+
+mkdir -p "$DATA" "$D" /var/lib/marzban /var/www/html /var/log/nginx
+touch /var/log/nginx/access.log /var/log/nginx/error.log
+
+# ---- data panel ----
+read -rp "Domain (sudah A ke IP ini): " domain
+[ -n "$domain" ] || die "domain wajib"
+read -rp "Email acme: " email
+[ -n "$email" ] || die "email wajib"
+while :; do
+  read -rp "Username panel (alnum, tanpa 'admin'): " userpanel
+  [[ "$userpanel" =~ ^[A-Za-z0-9]+$ ]] && [[ ! "$userpanel" =~ [Aa][Dd][Mm][Ii][Nn] ]] && break
+  y "ulangi"
+done
+read -rsp "Password panel: " passpanel; echo
+[ -n "$passpanel" ] || die "password wajib"
+printf '%s\n' "$domain" >"$DATA/domain"
+printf '%s\n' "$userpanel" >"$DATA/userpanel"
+printf '%s\n' "$passpanel" >"$DATA/passpanel"; chmod 600 "$DATA/passpanel"
+
+# ---- paket ----
+y "== update & paket =="
+export DEBIAN_FRONTEND=noninteractive
+apt-get update -y
+apt-get purge -y --auto-remove samba* apache2* sendmail* bind9* >/dev/null 2>&1 || true
+apt-get install -y curl wget unzip zip screen htop nano socat iptables ufw cron at bsdmainutils lsof lnav bc gnupg dnsutils net-tools vnstat docker.io docker-compose-plugin 2>/dev/null \
+  || { curl -fsSL https://get.docker.com | sh; }
+
+# ---- sysctl/BBR ----
+if ! grep -q "maylin-bbr" /etc/sysctl.conf 2>/dev/null; then
+  sed -i 's/^net.ipv6.conf.all.disable_ipv6.*/# &/' /etc/sysctl.conf 2>/dev/null || true
+  cat >>/etc/sysctl.conf <<'EOF'
+# maylin-bbr
+fs.file-max = 500000
+net.core.rmem_max = 67108864
+net.core.wmem_max = 67108864
+net.core.netdev_max_backlog = 250000
+net.core.somaxconn = 4096
+net.ipv4.tcp_fastopen = 3
+net.ipv4.ip_forward = 1
+net.core.default_qdisc = fq
+net.ipv4.tcp_congestion_control = bbr
+EOF
+  sysctl -p >/dev/null 2>&1 || true
+fi
+timedatectl set-timezone Asia/Jakarta 2>/dev/null || true
+
+# ---- file dari repo ----
+y "== ambil file aplikasi =="
+for f in env docker-compose.yml nginx.conf vps.conf xray.conf xray_config.json index.html profile cekservice.sh; do
+  curl -fsSL "$R/files/$f" -o "/tmp/maylin-$f" || die "gagal ambil $f"
+done
+install -m644 "/tmp/maylin-env" "$D/.env"
+install -m644 "/tmp/maylin-docker-compose.yml" "$D/docker-compose.yml"
+install -m644 "/tmp/maylin-nginx.conf" "$D/nginx.conf"
+install -m644 "/tmp/maylin-vps.conf" "$D/default.conf"
+install -m644 "/tmp/maylin-xray.conf" "$D/xray.conf"
+install -m644 "/tmp/maylin-xray_config.json" /var/lib/marzban/xray_config.json
+install -m644 "/tmp/maylin-index.html" /var/lib/marzban/templates/subscription/index.html
+install -m755 "/tmp/maylin-profile" /usr/bin/profile
+install -m755 "/tmp/maylin-cekservice.sh" /usr/bin/cekservice
+grep -q "/usr/bin/profile" /root/.profile || echo "[ -x /usr/bin/profile ] && /usr/bin/profile" >>/root/.profile
+echo "<pre>Setup by Maylin</pre>" >/var/www/html/index.html
+
+# ---- DB kosong (tanpa db bawaan orang) ----
+[ -s /var/lib/marzban/db.sqlite3 ] || : >/var/lib/marzban/db.sqlite3
+
+# ---- sertifikat (sebelum nginx pakai port 80) ----
+y "== admin & sertifikat =="
+curl -fsSL https://get.acme.sh | sh -s email="$email" >/dev/null 2>&1
+"$HOME/.acme.sh/acme.sh" --server letsencrypt --register-account -m "$email" >/dev/null 2>&1 || true
+"$HOME/.acme.sh/acme.sh" --issue -d "$domain" --standalone -k ec-256 --force || y "issue cert: cek DNS/port 80"
+"$HOME/.acme.sh/acme.sh" --installcert -d "$domain" \
+  --fullchainpath /var/lib/marzban/xray.crt --keypath /var/lib/marzban/xray.key --ecc || true
+
+# ---- admin via env, boot ----
+sed -i "s/# SUDO_USERNAME = \"admin\"/SUDO_USERNAME = \"$userpanel\"/" "$D/.env"
+sed -i "s/# SUDO_PASSWORD = \"admin\"/SUDO_PASSWORD = \"$passpanel\"/" "$D/.env"
+(cd "$D" && docker compose up -d)
+sleep 25
+
+docker exec marzban-marzban-1 marzban cli admin import-from-env -y 2>/dev/null || \
+  (cd "$D" && docker compose exec -T marzban marzban cli admin import-from-env -y) || y "import admin manual perlu"
+sed -i "s/SUDO_USERNAME = \"$userpanel\"/# SUDO_USERNAME = \"admin\"/" "$D/.env"
+sed -i "s/SUDO_PASSWORD = \"$passpanel\"/# SUDO_PASSWORD = \"admin\"/" "$D/.env"
+(cd "$D" && docker compose down && docker compose up -d)
+
+# ---- ufw ----
+y "== firewall =="
+ufw --force reset >/dev/null 2>&1 || true
+ufw default deny incoming >/dev/null
+ufw default allow outgoing >/dev/null
+ufw allow ssh >/dev/null; ufw allow http >/dev/null; ufw allow https >/dev/null
+ufw allow 8081/tcp >/dev/null; ufw allow 1080/tcp >/dev/null; ufw allow 1080/udp >/dev/null
+ufw --force enable >/dev/null
+
+# ---- token & info ----
+y "== selesai, generate token =="
+sleep 30
+curl -s -X POST "https://$domain/api/admin/token" -H 'accept: application/json' \
+  -H 'Content-Type: application/x-www-form-urlencoded' \
+  -d "grant_type=password&username=$userpanel&password=$passpanel" >"$DATA/token.json" || true
+cat >/root/log-install.txt <<EOF
+URL    : https://$domain/dashboard
+user   : $userpanel
+pass   : $passpanel
+EOF
+apt-get autoremove -y >/dev/null 2>&1 || true
+r "SELESAI. Login: https://$domain/dashboard"
+read -rp "Reboot sekarang? [Y/n] " a
+[[ "$a" =~ ^[Nn] ]] || reboot
