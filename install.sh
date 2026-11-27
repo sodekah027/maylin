@@ -65,7 +65,7 @@ timedatectl set-timezone Asia/Jakarta 2>/dev/null || true
 
 # ---- file dari repo ----
 y "== ambil file aplikasi =="
-for f in env docker-compose.yml nginx.conf vps.conf xray.conf xray_config.json index.html profile cekservice.sh; do
+for f in env docker-compose.yml nginx.conf vps.conf xray.conf xray_config.json profile cekservice.sh; do
   curl -fsSL "$R/files/$f" -o "/tmp/maylin-$f" || die "gagal ambil $f"
 done
 install -m644 "/tmp/maylin-env" "$D/.env"
@@ -74,7 +74,8 @@ install -m644 "/tmp/maylin-nginx.conf" "$D/nginx.conf"
 install -m644 "/tmp/maylin-vps.conf" "$D/default.conf"
 install -m644 "/tmp/maylin-xray.conf" "$D/xray.conf"
 install -m644 "/tmp/maylin-xray_config.json" /var/lib/marzban/xray_config.json
-install -m644 "/tmp/maylin-index.html" /var/lib/marzban/templates/subscription/index.html
+mkdir -p /var/lib/marzban/templates/subscription
+curl -fsSL "https://raw.githubusercontent.com/GawrAme/MarLing/main/index.html" -o /var/lib/marzban/templates/subscription/index.html || y "template subs gagal (opsional)"
 install -m755 "/tmp/maylin-profile" /usr/bin/profile
 install -m755 "/tmp/maylin-cekservice.sh" /usr/bin/cekservice
 grep -q "/usr/bin/profile" /root/.profile || echo "[ -x /usr/bin/profile ] && /usr/bin/profile" >>/root/.profile
